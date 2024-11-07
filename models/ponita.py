@@ -124,7 +124,8 @@ class SeparableFiberBundleConv(nn.Module):
         """ """
 
         # 1. Do the spatial convolution
-        message = x[torch.arange(x.shape[0])[:, None], edge_index[:, 0]] * self.kernel(kernel_basis)  # [num_edges, num_ori, in_channels]
+        message = torch.vmap(lambda a, idx, kb: a[idx[0]] * self.kernel(kb), in_dims=(0, 0, None)
+                             )(x, edge_index, kernel_basis)   # [num_edges, num_ori, in_channels]
         # if self.attention:
         #     keys = self.key_transform(x)
         #     queries = self.query_transform(x)
@@ -268,13 +269,16 @@ class Ponita(nn.Module):
                 self.read_out_layers.append(None)
     
     def compute_invariants(self, ori_grid, pos, edge_index):
-        rel_pos = (pos[torch.arange(128)[:, None], edge_index[:, 0]] 
-                   - pos[torch.arange(128)[:, None], edge_index[:, 1]])               # [num_edges, 3]
-        rel_pos = rel_pos[:, :, None]                                                 # [num_edges, 1, 3]
-        ori_grid_a = ori_grid[None, None, :, :]                                       # [1, 1, num_ori, 3]
-        ori_grid_b = ori_grid[None, :, None, :]                                       # [1, num_ori, 1, 3]
+        # TODO: We do not need spatial invariants of shape [batch*pixels, orientation, features]
+        # -> batch got already removed
+        # -> pixels only needs to be the size of a single kernel, as features is the "number of kernels"
+        # TODO: This should only need to be computed once if the grid is static across the dataset?
+        rel_pos = pos[0][edge_index[0, 0]] - pos[0][edge_index[0, 1]]              # [num_edges, 3]
+        rel_pos = rel_pos[:, None]                                                 # [num_edges, 1, 3]
+        ori_grid_a = ori_grid[None, :, :]                                          # [1, num_ori, 3]
+        ori_grid_b = ori_grid[:, None, :]                                          # [num_ori, 1, 3]
         # Displacement along the orientation
-        invariant1 = (rel_pos * ori_grid_a).sum(dim=-1, keepdim=True)  # [num_edges, num_ori, 1]
+        invariant1 = (rel_pos * ori_grid_a).sum(dim=-1, keepdim=True)              # [num_edges, num_ori, 1]
         # Displacement orthogonal to the orientation (take norm in 3D)
         if self.dim == 2:
             invariant2 = (rel_pos - invariant1 * ori_grid_a).sum(dim=-1, keepdim=True)   # [num_edges, num_ori, 1]
@@ -284,7 +288,7 @@ class Ponita(nn.Module):
         invariant3 = (ori_grid_a * ori_grid_b).sum(dim=-1, keepdim=True)                 # [num_ori, num_ori, 1]
         # Stack into spatial and orientaiton invariants separately
         spatial_invariants = torch.cat([invariant1, invariant2], dim=-1)             # [num_edges, num_ori, 2]
-        orientation_invariants = invariant3.squeeze(0)                               # [num_ori, num_ori, 1]
+        orientation_invariants = invariant3                                          # [num_ori, num_ori, 1]
         return spatial_invariants, orientation_invariants
 
 
