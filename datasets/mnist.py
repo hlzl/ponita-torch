@@ -1,77 +1,44 @@
-import os
 import torch
-import requests
-import zipfile
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
+from torchvision import datasets, transforms
 
+class MNIST(Dataset):
+    def __init__(self, train=True, transform=None, target_transform=None, download=True):
+        self.mnist_dataset = datasets.MNIST(root='/home/hlzl/Data', train=train, transform=transform,
+                                            target_transform=target_transform, download=download)
 
-class MNISTSuperpixels(Dataset):
-    url = 'https://data.pyg.org/datasets/MNISTSuperpixels.zip'
-    file_name = 'MNISTSuperpixels.zip'
+        # Precompute edge index
+        h, w = 28, 28  # MNIST image size
+        self.edge_index = torch.zeros((2, h * w * 4 - 4 * h), dtype=torch.long)
+        count = 0
+        for i in range(h):
+            for j in range(w):
+                if i > 0:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, (i - 1) * w + j])
+                    count += 1
+                if i < h - 1:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, (i + 1) * w + j])
+                    count += 1
+                if j > 0:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, i * w + j - 1])
+                    count += 1
+                if j < w - 1:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, i * w + j + 1])
+                    count += 1
 
-    def __init__(self, root, train=True):
-        self.root = root
-        self.train = train
-        self.raw_data_path = os.path.join(self.root, 'MNISTSuperpixels.pt')
-        self.data_file = 'train_data.pt' if self.train else 'test_data.pt'
-        self.data_path = os.path.join(self.root, self.data_file)
-        
-        if not os.path.exists(self.data_path):
-            self.download_and_process()
-
-        self.data = torch.load(self.data_path)
-
-    def __getitem__(self, index):
-        return self.data[index]
+        y_grid, x_grid = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')
+        self.pos = torch.stack([(x_grid - w // 2) / (w // 2), (y_grid - h // 2) / (h // 2)],
+                                dim=-1).reshape(h*w, -1)
 
     def __len__(self):
-        return len(self.data)
+        return len(self.mnist_dataset)
 
-    def download_and_process(self):
-        # Download
-        download_path = os.path.join(self.root, self.file_name)
-        if not os.path.exists(self.root):
-            os.makedirs(self.root)
-        response = requests.get(self.url)
-        with open(download_path, 'wb') as f:
-            f.write(response.content)
+    def __getitem__(self, idx):
+        image, label = self.mnist_dataset[idx]
 
-        # Extract
-        with zipfile.ZipFile(download_path, 'r') as zip_ref:
-            zip_ref.extractall(self.root)
-        os.remove(download_path)
+        return {'pos': self.pos, 'x': transforms.functional.to_tensor(image).flatten(),
+                'y': label, 'batch': idx, 'edge_index': self.edge_index}
 
-        data = torch.load(self.raw_data_path)
-        torch.save(data[0], os.path.join(self.root, 'train_data.pt'))
-        torch.save(data[1], os.path.join(self.root, 'test_data.pt'))
-        os.remove(self.raw_data_path)
-
-
-def collate_fn(batch):
-    pos, x, y, batch_idx, edge_index_batch = [], [], [], [], []
-    cum_nodes = 0
-    for i, item in enumerate(batch):
-        num_nodes = item['x'].shape[0]
-        pos.append(item['pos'])
-        x.append(item['x'])
-        y.append(item['y'])
-        batch_idx.extend([i] * num_nodes)
-        edge_index = item['edge_index'] + cum_nodes  # Offset node indices
-        edge_index_batch.append(edge_index)
-        cum_nodes += num_nodes
-    pos = torch.cat(pos, dim=0)
-    x = torch.cat(x, dim=0)
-    y = torch.stack(y, dim=0)
-    batch_idx = torch.tensor(batch_idx, dtype=torch.long)
-    edge_index = torch.cat(edge_index_batch, dim=1)
-
-    return {'pos': pos, 'x': x, 'y': y.squeeze(), 'batch': batch_idx, 'edge_index': edge_index}
-
-# # Example usage:
-# root_dir = './data'
-# dataset = MNISTSuperpixelsDataset(root=root_dir, train=True)
-# dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
-
-# for data, labels in dataloader:
-#     print(data.shape, labels.shape)
-#     break
+# Usage
+# train_loader = DataLoader(MNIST(train=True), batch_size=32, shuffle=True)
+# test_loader = DataLoader(MNIST(train=False), batch_size=32, shuffle=False)

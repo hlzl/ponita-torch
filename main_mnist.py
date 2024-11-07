@@ -9,7 +9,8 @@ import torch.nn as nn
 import torchmetrics
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
-from datasets.mnist import MNISTSuperpixels, collate_fn
+from datasets.mnist import MNIST
+from datasets.mnist_superpixel import MNISTSuperpixels, collate_fn
 from models.ponita import Ponita
 
 torch.set_float32_matmul_precision('medium')
@@ -145,19 +146,22 @@ def main(args):
     pl.seed_everything(42)
 
     # Load the data
-    dataset_train = MNISTSuperpixels(root=args.root, train=True)
-    dataset_test = MNISTSuperpixels(root=args.root, train=False)
+    # dataset_train = MNISTSuperpixels(root=args.root, train=True)
+    # dataset_test = MNISTSuperpixels(root=args.root, train=False)
     
     # Create train, val, test splits
-    train_size = int(0.9 * len(dataset_train))
-    val_size = len(dataset_train) - train_size
-    dataset_train, dataset_val = torch.utils.data.random_split(dataset_train, [train_size, val_size])
-    datasets = {'train': dataset_train, 'val': dataset_val, 'test': dataset_test}
+    # train_size = int(0.9 * len(dataset_train))
+    # val_size = len(dataset_train) - train_size
+    # dataset_train, dataset_val = torch.utils.data.random_split(dataset_train, [train_size, val_size])
+    # datasets = {'train': dataset_train, 'val': dataset_val, 'test': dataset_test}
 
     
-    dataloaders = {
-        split: DataLoader(dataset, batch_size=args.batch_size, shuffle=(split == 'train'), num_workers=args.num_workers, pin_memory=True, collate_fn=collate_fn)
-        for split, dataset in datasets.items()}
+    # dataloaders = {
+    #     split: DataLoader(dataset, batch_size=args.batch_size, shuffle=(split == 'train'), num_workers=args.num_workers, pin_memory=True, collate_fn=collate_fn)
+    #     for split, dataset in datasets.items()}
+
+    dataloaders = {"train": DataLoader(MNIST(train=True), batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=True),
+                   "val": DataLoader(MNIST(train=False), batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=True)}
     
     # Hardware settings
     if args.gpus > 0:
@@ -170,10 +174,7 @@ def main(args):
         args.num_workers = os.cpu_count()
 
     # Logging settings
-    if args.log:
-        logger = pl.loggers.WandbLogger(project="PONITA-MNIST", name="Ponita", config=args, save_dir='logs')
-    else:
-        logger = None
+    logger = None
 
     # Pytorch lightning call backs and trainer
     callbacks = [pl.callbacks.ModelCheckpoint(monitor='valid ACC', mode = 'max', every_n_epochs = 1, save_last=True)]
@@ -198,25 +199,25 @@ if __name__ == "__main__":
     # ------------------------ Input arguments
     
     # Run parameters
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=96)
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=5e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-10)
     parser.add_argument('--log', type=eval, default=True)
     parser.add_argument('--enable_progress_bar', type=eval, default=True)
-    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--num_workers', type=int, default=32)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--test_ckpt', type=str, default=None)
     parser.add_argument('--resume_ckpt', type=str, default=None)
     
     # Train settings
-    parser.add_argument('--train_augm', type=eval, default=True)
+    parser.add_argument('--train_augm', type=eval, default=False)
     
     # Dataset
-    parser.add_argument('--root', type=str, default="datasets/mnist")
+    parser.add_argument('--root', type=str, default="/home/hlzl/Data")
     
     # PONTA model settings
-    parser.add_argument('--num_ori', type=int, default=10)
+    parser.add_argument('--num_ori', type=int, default=4)
     parser.add_argument('--hidden_dim', type=int, default=128)
     parser.add_argument('--basis_dim', type=int, default=256)
     parser.add_argument('--degree', type=int, default=2)

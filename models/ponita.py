@@ -10,13 +10,13 @@ import math
 
 
 def scatter_add(src, index, dim_size):
-    out_shape = [dim_size] + list(src.shape[1:])
+    out_shape = list(dim_size) + list(src.shape[2:])
     out = torch.zeros(out_shape, dtype=src.dtype, device=src.device)
     dims_to_add = src.dim() - index.dim()
     for _ in range(dims_to_add):
         index = index.unsqueeze(-1)
     index_expanded = index.expand_as(src)
-    return out.scatter_add_(0, index_expanded, src)
+    return out.scatter_add_(1, index_expanded, src)
 
 def scatter_softmax(src, index, dim_size):
     src_exp = torch.exp(src - src.max())
@@ -124,22 +124,22 @@ class SeparableFiberBundleConv(nn.Module):
         """ """
 
         # 1. Do the spatial convolution
-        message = x[edge_index[0]] * self.kernel(kernel_basis)  # [num_edges, num_ori, in_channels]
-        if self.attention:
-            keys = self.key_transform(x)
-            queries = self.query_transform(x)
-            d_k = keys.size(-1)
-            att_logits = (keys[edge_index[0]] * queries[edge_index[1]]).sum(dim=-1, keepdim=True) / math.sqrt(d_k)
-            att_weights = scatter_softmax(att_logits, edge_index[1], x.size(0))
-            message = message * att_weights            
-        x_1 = scatter_add(src=message, index=edge_index[1], dim_size=x.size(0))
+        message = x[torch.arange(x.shape[0])[:, None], edge_index[:, 0]] * self.kernel(kernel_basis)  # [num_edges, num_ori, in_channels]
+        # if self.attention:
+        #     keys = self.key_transform(x)
+        #     queries = self.query_transform(x)
+        #     d_k = keys.size(-1)
+        #     att_logits = (keys[edge_index[0]] * queries[edge_index[1]]).sum(dim=-1, keepdim=True) / math.sqrt(d_k)
+        #     att_weights = scatter_softmax(att_logits, edge_index[1], x.size(0))
+        #     message = message * att_weights            
+        x_1 = scatter_add(src=message, index=edge_index[:, 1], dim_size=x.shape[:2])
 
         # 2. Fiber (spherical) convolution
         fiber_kernel = self.fiber_kernel(fiber_kernel_basis)
         if self.depthwise:
-            x_2 = torch.einsum("boc,poc->bpc", x_1, fiber_kernel) / fiber_kernel.shape[-2]
+            x_2 = torch.einsum("nboc,poc->nbpc", x_1, fiber_kernel) / fiber_kernel.shape[-2]
         else:
-            x_2 = torch.einsum("boc,podc->bpd",x_1,fiber_kernel.unflatten(-1, (self.out_channels, self.in_channels))) / fiber_kernel.shape[-2]
+            x_2 = torch.einsum("nboc,podc->nbpd",x_1,fiber_kernel.unflatten(-1, (self.out_channels, self.in_channels))) / fiber_kernel.shape[-2]
 
         # Re-callibrate the initializaiton
         if self.training and not (self.callibrated):
@@ -268,23 +268,23 @@ class Ponita(nn.Module):
                 self.read_out_layers.append(None)
     
     def compute_invariants(self, ori_grid, pos, edge_index):
-        pos_send, pos_receive = pos[edge_index[0]], pos[edge_index[1]]                # [num_edges, 3]
-        rel_pos = (pos_send - pos_receive)                                            # [num_edges, 3]
-        rel_pos = rel_pos[:, None, :]                                                 # [num_edges, 1, 3]
-        ori_grid_a = ori_grid[None,:,:]                                               # [1, num_ori, 3]
-        ori_grid_b = ori_grid[:, None,:]                                              # [num_ori, 1, 3]
+        rel_pos = (pos[torch.arange(128)[:, None], edge_index[:, 0]] 
+                   - pos[torch.arange(128)[:, None], edge_index[:, 1]])               # [num_edges, 3]
+        rel_pos = rel_pos[:, :, None]                                                 # [num_edges, 1, 3]
+        ori_grid_a = ori_grid[None, None, :, :]                                       # [1, 1, num_ori, 3]
+        ori_grid_b = ori_grid[None, :, None, :]                                       # [1, num_ori, 1, 3]
         # Displacement along the orientation
         invariant1 = (rel_pos * ori_grid_a).sum(dim=-1, keepdim=True)  # [num_edges, num_ori, 1]
         # Displacement orthogonal to the orientation (take norm in 3D)
         if self.dim == 2:
-            invariant2 = (rel_pos - invariant1 * ori_grid_a).sum(dim=-1, keepdim=True)  # [num_edges, num_ori, 1]
+            invariant2 = (rel_pos - invariant1 * ori_grid_a).sum(dim=-1, keepdim=True)   # [num_edges, num_ori, 1]
         elif self.dim == 3:
             invariant2 = (rel_pos - invariant1 * ori_grid_a).norm(dim=-1, keepdim=True)  # [num_edges, num_ori, 1]
         # Relative orientation
-        invariant3 = (ori_grid_a * ori_grid_b).sum(dim=-1, keepdim=True)              # [num_ori, num_ori, 1]
+        invariant3 = (ori_grid_a * ori_grid_b).sum(dim=-1, keepdim=True)                 # [num_ori, num_ori, 1]
         # Stack into spatial and orientaiton invariants separately
-        spatial_invariants = torch.cat([invariant1, invariant2], dim=-1)  # [num_edges, num_ori, 2]
-        orientation_invariants = invariant3  # [num_ori, num_ori, 1]
+        spatial_invariants = torch.cat([invariant1, invariant2], dim=-1)             # [num_edges, num_ori, 2]
+        orientation_invariants = invariant3.squeeze(0)                               # [num_ori, num_ori, 1]
         return spatial_invariants, orientation_invariants
 
 
@@ -303,7 +303,7 @@ class Ponita(nn.Module):
         fiber_kernel_basis = self.fiber_basis_fn(orientation_invariants)  # [num_ori, num_ori, basis_dim]
 
         # Initial feature embeding
-        x = self.x_embedder(x)
+        x = self.x_embedder(x[..., None])
         x = x.unsqueeze(-2).repeat_interleave(ori_grid.shape[-2], dim=-2)  # [B*N,O,C]
 
         # Interaction + readout layers
@@ -318,12 +318,14 @@ class Ponita(nn.Module):
         readout_scalar, readout_vec = torch.split(readout, [self.output_dim, self.output_dim_vec], dim=-1)
 
         # Read out scalar and vector predictions
-        output_scalar = readout_scalar.mean(dim=-2)  # [B*N,C]
-        output_vector = (torch.einsum("boc,od->bcd", readout_vec, ori_grid) / ori_grid.shape[-2])  # [B*N,C,3]
+        output_scalar = readout_scalar.mean(dim=-2)  # [B, N, C]
+        output_vector = (torch.einsum("nboc,od->nbcd", readout_vec, ori_grid) / ori_grid.shape[-2])  # [B,N,C,3]
 
         if self.global_pooling:
-            output_scalar = scatter_add(src=output_scalar, index=batch, dim_size=batch.max().item() + 1)
-            output_vector = scatter_add(src=output_vector, index=batch, dim_size=batch.max().item() + 1)
+            # output_scalar = scatter_add(src=output_scalar, index=batch, dim_size=batch.max().item() + 1)
+            # output_vector = scatter_add(src=output_vector, index=batch, dim_size=batch.max().item() + 1)
+            output_scalar = output_scalar.mean(axis=1)
+            output_vector = output_vector.mean(axis=1)
 
         # Return predictions
         return output_scalar, output_vector
