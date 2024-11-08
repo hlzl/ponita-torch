@@ -9,10 +9,12 @@ class MNIST(Dataset):
 
         # Precompute edge index
         h, w = 28, 28  # MNIST image size
-        self.edge_index = torch.zeros((2, h * w * 4 - 4 * h), dtype=torch.long)
+        self.edge_index = torch.zeros((2, h * w * 8 - h * 3 * 4 + 4), dtype=torch.long)
         count = 0
+
         for i in range(h):
             for j in range(w):
+                # 4-neighbor connections
                 if i > 0:
                     self.edge_index[:, count] = torch.tensor([i * w + j, (i - 1) * w + j])
                     count += 1
@@ -24,6 +26,20 @@ class MNIST(Dataset):
                     count += 1
                 if j < w - 1:
                     self.edge_index[:, count] = torch.tensor([i * w + j, i * w + j + 1])
+                    count += 1
+
+                # 4 diagonal connections
+                if i > 0 and j > 0:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, (i - 1) * w + j - 1])
+                    count += 1
+                if i > 0 and j < w - 1:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, (i - 1) * w + j + 1])
+                    count += 1
+                if i < h - 1 and j > 0:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, (i + 1) * w + j - 1])
+                    count += 1
+                if i < h - 1 and j < w - 1:
+                    self.edge_index[:, count] = torch.tensor([i * w + j, (i + 1) * w + j + 1])
                     count += 1
 
         y_grid, x_grid = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')

@@ -273,6 +273,8 @@ class Ponita(nn.Module):
         # -> batch got already removed
         # -> pixels only needs to be the size of a single kernel, as features is the "number of kernels"
         # TODO: This should only need to be computed once if the grid is static across the dataset?
+        # NOTE: Due to pixel at the border having less neighbours, reducing the "pixel-edges" dimension is a bit tricky
+        # -> this could be solved by adding a padding to the conv
         rel_pos = pos[0][edge_index[0, 0]] - pos[0][edge_index[0, 1]]              # [num_edges, 3]
         rel_pos = rel_pos[:, None]                                                 # [num_edges, 1, 3]
         ori_grid_a = ori_grid[None, :, :]                                          # [1, num_ori, 3]

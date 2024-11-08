@@ -161,7 +161,8 @@ def main(args):
     #     for split, dataset in datasets.items()}
 
     dataloaders = {"train": DataLoader(MNIST(train=True), batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=True),
-                   "val": DataLoader(MNIST(train=False), batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True, drop_last=True)}
+                   "val": DataLoader(MNIST(train=False), batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True, drop_last=True),
+                   "test": DataLoader(MNIST(train=False), batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True, drop_last=True)}
     
     # Hardware settings
     if args.gpus > 0:
